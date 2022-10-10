@@ -1,0 +1,40 @@
+{
+  "name": "serverless-s3-object-lambda",
+  "version": "1.0.0",
+  "description": "",
+  "main": "handler.js",
+  "scripts": {
+    "serverless": "serverless",
+    "sls": "serverless"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@babel/cli": "^7.11.6",
+    "@babel/core": "^7.11.6",
+    "@babel/preset-env": "^7.11.5",
+    "babel-loader": "^8.1.0",
+    "babel-plugin-module-resolver": "^4.0.0",
+    "copy-webpack-plugin": "^9.0.1",
+    "native-ext-loader": "^2.3.0",
+    "serverless": "^2.57.0",
+    "serverless-scriptable-plugin": "^1.2.1",
+    "serverless-webpack": "^5.5.4",
+    "webpack": "^5.1.0",
+    "webpack-node-externals": "^2.5.2"
+  },
+  "dependencies": {
+    "@aws-crypto/client-node": "^2.1.0",
+    "@babel/cli": "^7.12.1",
+    "@babel/core": "^7.12.3",
+    "@babel/preset-env": "^7.12.1",
+    "axios": "^0.21.1",
+    "base64-js": "^1.5.1",
+    "es6-promise": "^4.2.8",
+    "false": "^0.0.4",
+    "fluent-ffmpeg": "^2.1.2",
+    "node-loader": "^2.0.0",
+    "sharp": "^0.30.7"
+  }
+}

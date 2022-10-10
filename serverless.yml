@@ -1,0 +1,141 @@
+service: s3-object-lambda
+variablesResolutionMode: 20210326
+projectDir: ../
+package:
+  individually: true
+plugins:
+  - serverless-webpack
+provider:
+  name: aws
+  runtime: nodejs12.x
+  region: us-east-1
+  deploymentPrefix: ${self:service}
+  versionFunctions: false
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action: "*"
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - s3-object-lambda:WriteGetObjectResponse
+      Resource: "*"
+    - Effect: Allow
+      Action:
+        - s3:GetObject
+        - s3:PutObject
+        - s3:GetObjectTagging
+        - s3:PutObjectTagging
+        - s3:DeleteObject
+        - s3:ListBucket
+      Resource:
+        - ${self:custom.accountStorageBucketArn}
+        - ${self:custom.accountStorageBucketArn}/*
+  environment:
+    region: ${self:provider.region}
+custom:
+  identityPoolId: ${cf:general-resources-${self:provider.stage}.IdentityPoolId}
+  accountStorageBucketName: ${cf:general-resources-${self:provider.stage}.AccountStorageBucketName}
+  accountStorageBucketArn: ${cf:general-resources-${self:provider.stage}.AccountStorageBucketArn}
+  webpack:
+    webpackConfig: ./webpack.config.js
+    packager: yarn
+    packagerOptions:
+      scripts:
+        - rm -rf node_modules/sharp
+    includeModules:
+      nodeModulesRelativeDir: ../../
+      forceExclude:
+        - aws-sdk
+        - sharp
+functions:
+  createThumbnail:
+    handler: functions/createThumbnail.handler
+    timeout: 30
+    memorySize: 2048
+    environment:
+      BUCKET_NAME: ${self:custom.accountStorageBucketName}
+      FFMPEG_PATH: /opt/ffmpeg/ffmpeg
+    layers:
+      - ${cf:layers-${self:provider.stage}.Ffmpeg}
+      - ${cf:layers-${self:provider.stage}.Sharp}
+    events:
+      - s3:
+          bucket: ${self:custom.accountStorageBucketName}
+          existing: true
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: account-private/
+            - suffix: -original
+  createBannersetThumbnail:
+    handler: functions/createBannersetThumbnail.handler
+    timeout: 30
+    memorySize: 2048
+    environment:
+      BUCKET_NAME: ${self:custom.accountStorageBucketName}
+      FFMPEG_PATH: /opt/ffmpeg/ffmpeg
+    layers:
+      - ${cf:layers-${self:provider.stage}.Sharp}
+    events:
+      - s3:
+          bucket: ${self:custom.accountStorageBucketName}
+          existing: true
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: account-private/
+            - suffix: -bannerset
+  handleApiUpload:
+    handler: functions/handleApiUpload.handler
+    timeout: 30
+    memorySize: 2048
+    environment:
+      BUCKET_NAME: ${self:custom.accountStorageBucketName}
+      FFMPEG_PATH: /opt/ffmpeg/ffmpeg
+    layers:
+      - ${cf:layers-${self:provider.stage}.Ffmpeg}
+      - ${cf:layers-${self:provider.stage}.Sharp}
+    events:
+      - s3:
+          bucket: ${self:custom.accountStorageBucketName}
+          existing: true
+          event: s3:ObjectCreated:*
+          rules:
+            - prefix: account-private/
+            - suffix: -original-api
+  getObjectTransformer:
+    handler: functions/getObjectTransformer.handler
+    timeout: 30
+    memorySize: 2048
+    environment:
+      BUCKET_NAME: ${self:custom.accountStorageBucketName}
+      FFMPEG_PATH: /opt/ffmpeg/ffmpeg
+    layers:
+      - ${cf:layers-${self:provider.stage}.Ffmpeg}
+      - ${cf:layers-${self:provider.stage}.Sharp}
+resources:
+  Resources:
+    accountBucketAccessPoint:
+      Type: AWS::S3::AccessPoint
+      Properties:
+        Bucket: ${self:custom.accountStorageBucketName}
+        Name: account-access-point-${self:provider.stage}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: false
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+    lambdaAccessPoint:
+      Type: AWS::S3ObjectLambda::AccessPoint
+      Properties:
+        Name: account-object-lambda-access-point-${self:provider.stage}
+        ObjectLambdaConfiguration:
+          AllowedFeatures: ["GetObject-Range", "GetObject-PartNumber"]
+          CloudWatchMetricsEnabled: true
+          SupportingAccessPoint: arn:aws:s3:${aws:region}:${aws:accountId}:accesspoint/account-access-point-${self:provider.stage}
+          TransformationConfigurations:
+            - Actions: ["GetObject"]
+              ContentTransformation:
+                AwsLambda:
+                  FunctionArn: !GetAtt GetObjectTransformerLambdaFunction.Arn
+  Outputs:
+    S3ObjectLambdaArn:
+      Value: !GetAtt lambdaAccessPoint.Arn
