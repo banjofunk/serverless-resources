@@ -2,15 +2,25 @@ import ffmpeg from 'fluent-ffmpeg';
 import sharp from 'sharp';
 import { S3 } from 'aws-sdk';
 import { Readable } from 'stream';
+import { promises as fs } from 'fs';
+import util from 'util';
+import { exec as execCallback } from 'child_process';
+import path from 'path';
+import os from 'os';
 
-const fs = require('fs').promises;
-const util = require('util');
-const exec = util.promisify(require('child_process').exec);
+const exec = util.promisify(execCallback);
 
 const s3 = new S3();
 
-const outputFile = '/tmp/output';
+const outputFile = path.join(os.tmpdir(), 'output');
 
+/**
+ * Lambda handler to process S3 object creation events.
+ * Generates thumbnails for videos and audio files.
+ *
+ * @param {object} event - The Lambda event object.
+ * @returns {Promise<object>} - The result of the S3 putObject operation.
+ */
 export const handler = async event => {
   console.log(event.Records[0].s3);
   process.env.PATH = `${process.env.PATH}:${process.env.LAMBDA_TASK_ROOT}`;
@@ -49,6 +59,12 @@ export const handler = async event => {
     .promise();
 };
 
+/**
+ * Extracts a frame from a video stream to use as a thumbnail.
+ *
+ * @param {Buffer|Stream} data - The video data.
+ * @returns {Promise<Buffer>} - The thumbnail image buffer.
+ */
 const processVideo = async data => {
   const stream = Readable.from(data);
 
@@ -60,7 +76,7 @@ const processVideo = async data => {
       .outputOptions('-frames', '1')
       .outputOptions('-f image2pipe')
       .outputOptions('-vcodec png')
-      .output('/tmp/output')
+      .output(outputFile)
       .on('error', reject)
       .on('end', resolve)
       .run();
@@ -69,8 +85,15 @@ const processVideo = async data => {
   return fs.readFile(outputFile);
 };
 
+/**
+ * Generates a waveform visualization for an audio file.
+ *
+ * @param {Buffer} data - The audio data.
+ * @param {object} metadata - Metadata associated with the audio file.
+ * @returns {Promise<Buffer>} - The waveform image buffer.
+ */
 const processAudio = async (data, metadata = {}) => {
-  const tmpPath = '/tmp/audioFile';
+  const tmpPath = path.join(os.tmpdir(), 'audioFile');
   const { waveform } = metadata;
 
   if (waveform) {
@@ -85,24 +108,36 @@ const processAudio = async (data, metadata = {}) => {
   const sampleRate = await getSampleRate(tmpPath);
   const peaks = 30;
   const sampleSize = Math.round((duration * sampleRate) / peaks);
-  const waveformData = genWaveFormData(tmpPath, sampleSize);
+  const waveformData = await genWaveFormData(tmpPath, sampleSize);
 
   console.log({ duration, sampleRate, peaks: waveformData.length, sampleSize, waveformData });
 
   return genSvg(waveformData);
 };
 
+/**
+ * Gets the sample rate of an audio file using ffprobe.
+ *
+ * @param {string} filePath - Path to the audio file.
+ * @returns {Promise<number>} - The sample rate.
+ */
 const getSampleRate = async filePath => {
   const cmd = `/opt/ffmpeg/ffprobe -v error -show_streams -of json=c=0 ${filePath}`;
   const { stdout, stderr } = await exec(cmd);
 
-  if (stderr) return stderr;
+  if (stderr) throw new Error(stderr);
 
   const { streams: [{ sample_rate: sampleRate }] = [] } = JSON.parse(stdout);
 
   return Math.ceil(sampleRate);
 };
 
+/**
+ * Gets the duration of an audio file using ffprobe.
+ *
+ * @param {string} filePath - Path to the audio file.
+ * @returns {Promise<number>} - The duration in seconds.
+ */
 const getDuration = async filePath => {
   const cmd = `\
   /opt/ffmpeg/ffprobe -v error \
@@ -112,11 +147,18 @@ const getDuration = async filePath => {
 
   const { stdout, stderr } = await exec(cmd);
 
-  if (stderr) return stderr;
+  if (stderr) throw new Error(stderr);
 
   return Math.ceil(stdout);
 };
 
+/**
+ * Generates waveform data points from an audio file.
+ *
+ * @param {string} filePath - Path to the audio file.
+ * @param {number} sampleSize - The number of samples to process per point.
+ * @returns {Promise<number[]>} - An array of waveform data points.
+ */
 const genWaveFormData = async (filePath, sampleSize) => {
   const cmd = `\
   /opt/ffmpeg/ffprobe -v error -f lavfi \
@@ -125,14 +167,15 @@ const genWaveFormData = async (filePath, sampleSize) => {
 
   const { stdout, stderr } = await exec(cmd);
 
-  if (stderr) return stderr;
+  if (stderr) throw new Error(stderr);
 
   const points = stdout.split('\n').map(itm => {
     const str = String(itm).trim();
+    if (!str) return 0;
     const num = Math.round(Number(str) * 100);
 
     return num < 0 ? num * -1 : num;
-  });
+  }).filter(n => !isNaN(n));
 
   return points;
 };
@@ -143,27 +186,39 @@ const svgTemplate = (path, viewBox) => `\
 </svg>\
 `;
 
+/**
+ * Generates an SVG image from waveform data points.
+ *
+ * @param {number[]} peakInputs - The waveform data points.
+ * @returns {Promise<Buffer>} - The PNG image buffer.
+ */
 const genSvg = peakInputs => {
-  const yScale = 400 / Math.max(...peakInputs);
+  const MAX_HEIGHT = 400;
+  const STROKE_WIDTH = 4;
+  const POINT_SPACING = 40;
+  const PADDING = 50;
+  const ARC_RADIUS = 10;
+
+  const yScale = MAX_HEIGHT / Math.max(...peakInputs);
   const peaks = peakInputs.map(p => Math.round(p * yScale));
-  const vw = peaks.length * 40 + 100;
+  const vw = peaks.length * POINT_SPACING + (PADDING * 2);
   const vh = Math.max(...peaks) * 2;
-  const center = vh / 2 + 50;
+  const center = vh / 2 + PADDING;
   const viewBox = `0 0 ${vw} ${vh + 100}`;
   const path = peaks
     .map((peak, idx) => {
-      const startX = idx * 40 + 50;
-      const endX = idx * 40 + 70;
+      const startX = idx * POINT_SPACING + PADDING;
+      const endX = idx * POINT_SPACING + (PADDING + 20);
       const topY = center - peak;
       const botY = center + peak;
-      const arc = `L${startX} ${topY} A10 10 0 0 1 ${endX} ${topY} L${endX} ${botY} A10 10 1 1 0 ${endX + 20} ${botY}`;
+      const arc = `L${startX} ${topY} A${ARC_RADIUS} ${ARC_RADIUS} 0 0 1 ${endX} ${topY} L${endX} ${botY} A${ARC_RADIUS} ${ARC_RADIUS} 1 1 0 ${endX + 20} ${botY}`;
 
       return arc;
     })
     .join(' ');
 
-  const start = `M0 ${center} L50 ${center}`;
-  const end = `L${peakInputs.length * 40 + 50} ${center}L${vw} ${center}`;
+  const start = `M0 ${center} L${PADDING} ${center}`;
+  const end = `L${peakInputs.length * POINT_SPACING + PADDING} ${center}L${vw} ${center}`;
   const fullPath = `${start} ${path} ${end}`;
 
   const template = svgTemplate(fullPath, viewBox);
@@ -176,34 +231,3 @@ const genSvg = peakInputs => {
     .png()
     .toBuffer();
 };
-
-/**
- * Mosaic Notes
- *
- * halfPage: 300x600
- * wideSkyscraper: 160x600
- * largeRectangle: 336x280
- * fullBanner: 468x60
- * leaderboard: 728x90
- * halfBanner: 234x60
- *
- * Resizes - clockwise
- * 300 x 600
- * 160 x 600 (to: 130 x 488)
- * 336 x 280 (to: 470 x 391)
- * 468 x 60 (to: 470 x 60)
- * 728 x 90 (to: 630 x 77)
- * 234 x 60 (to: 960 x 246)
- *
- * Widths (rows top to bottom)
- * (300) + 30 + (130) + 30 + (470) = 960
- * (300) + 30 + (130) + 30 + (470) = 960
- * (300) + 30 + (630) = 960
- * (960) = 960
- *
- * Heights (cols left to right)
- * 38 + (600) + 38 + (246) + 38 = 960
- * 38 + (488) + 35 + (77) + 38 + (246) + 38 = 960
- * 38 + (391) + 37 + (60) + 35 + (77) + 38 + (246) + 38 = 960
- *
- */

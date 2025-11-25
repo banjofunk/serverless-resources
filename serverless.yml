@@ -1,24 +1,39 @@
+# Service name for CloudFormation stack and resource naming
 service: s3-object-lambda
+
+# Use newer variables resolution for better performance
 variablesResolutionMode: 20210326
+
+# Project directory reference
 projectDir: ../
+
+# Package each Lambda function individually for optimized bundle sizes
 package:
   individually: true
+
+# Plugins for webpack bundling
 plugins:
   - serverless-webpack
+# AWS provider configuration
 provider:
   name: aws
-  runtime: nodejs12.x
+  runtime: nodejs18.x  # Updated from deprecated nodejs12.x
+  stage: dev
   region: us-east-1
   deploymentPrefix: ${self:service}
-  versionFunctions: false
+  versionFunctions: false  # Disable versioning to reduce CloudFormation complexity
+  # IAM permissions for Lambda functions
   iamRoleStatements:
+    # Broad permissions (consider restricting in production)
     - Effect: "Allow"
       Action: "*"
       Resource: "*"
+    # S3 Object Lambda specific permission to write transformed responses
     - Effect: Allow
       Action:
         - s3-object-lambda:WriteGetObjectResponse
       Resource: "*"
+    # S3 bucket permissions for reading/writing objects and tags
     - Effect: Allow
       Action:
         - s3:GetObject
@@ -30,35 +45,48 @@ provider:
       Resource:
         - ${self:custom.accountStorageBucketArn}
         - ${self:custom.accountStorageBucketArn}/*
+  # Environment variables available to all functions
   environment:
     region: ${self:provider.region}
+# Custom variables and plugin configuration
 custom:
+  # Import values from the general-resources CloudFormation stack
   identityPoolId: ${cf:general-resources-${self:provider.stage}.IdentityPoolId}
   accountStorageBucketName: ${cf:general-resources-${self:provider.stage}.AccountStorageBucketName}
   accountStorageBucketArn: ${cf:general-resources-${self:provider.stage}.AccountStorageBucketArn}
+  
+  # Webpack bundling configuration
   webpack:
     webpackConfig: ./webpack.config.js
     packager: yarn
     packagerOptions:
       scripts:
+        # Remove sharp from node_modules (using Lambda layer instead)
         - rm -rf node_modules/sharp
     includeModules:
       nodeModulesRelativeDir: ../../
       forceExclude:
+        # Exclude AWS SDK (available in Lambda runtime)
         - aws-sdk
+        # Exclude sharp (provided by Lambda layer)
         - sharp
+# Lambda function definitions
 functions:
+  # Creates thumbnails from uploaded videos and audio files
+  # - Videos: extracts a frame at 1 second
+  # - Audio: generates waveform visualization
   createThumbnail:
     handler: functions/createThumbnail.handler
     timeout: 30
-    memorySize: 2048
+    memorySize: 2048  # High memory for video/audio processing
     environment:
       BUCKET_NAME: ${self:custom.accountStorageBucketName}
-      FFMPEG_PATH: /opt/ffmpeg/ffmpeg
+      FFMPEG_PATH: /opt/ffmpeg/ffmpeg  # Path to ffmpeg binary in Lambda layer
     layers:
-      - ${cf:layers-${self:provider.stage}.Ffmpeg}
-      - ${cf:layers-${self:provider.stage}.Sharp}
+      - ${cf:layers-${self:provider.stage}.Ffmpeg}  # FFmpeg for video/audio processing
+      - ${cf:layers-${self:provider.stage}.Sharp}   # Sharp for image manipulation
     events:
+      # Triggered when objects with '-original' suffix are uploaded
       - s3:
           bucket: ${self:custom.accountStorageBucketName}
           existing: true
@@ -66,16 +94,19 @@ functions:
           rules:
             - prefix: account-private/
             - suffix: -original
+  # Creates composite thumbnails from banner sets (multiple ad sizes)
+  # Combines all banner sizes into a single preview image
   createBannersetThumbnail:
     handler: functions/createBannersetThumbnail.handler
     timeout: 30
-    memorySize: 2048
+    memorySize: 2048  # High memory for image compositing
     environment:
       BUCKET_NAME: ${self:custom.accountStorageBucketName}
       FFMPEG_PATH: /opt/ffmpeg/ffmpeg
     layers:
-      - ${cf:layers-${self:provider.stage}.Sharp}
+      - ${cf:layers-${self:provider.stage}.Sharp}  # Sharp for image processing
     events:
+      # Triggered when objects with '-bannerset' suffix are uploaded
       - s3:
           bucket: ${self:custom.accountStorageBucketName}
           existing: true
@@ -83,6 +114,8 @@ functions:
           rules:
             - prefix: account-private/
             - suffix: -bannerset
+  # Handles image uploads from API, validates format and extracts metadata
+  # Renames objects after validation and creates metadata tags
   handleApiUpload:
     handler: functions/handleApiUpload.handler
     timeout: 30
@@ -94,6 +127,7 @@ functions:
       - ${cf:layers-${self:provider.stage}.Ffmpeg}
       - ${cf:layers-${self:provider.stage}.Sharp}
     events:
+      # Triggered when objects with '-original-api' suffix are uploaded
       - s3:
           bucket: ${self:custom.accountStorageBucketName}
           existing: true
@@ -101,18 +135,24 @@ functions:
           rules:
             - prefix: account-private/
             - suffix: -original-api
+  # S3 Object Lambda function for on-the-fly transformations
+  # Transforms objects during GET requests based on query parameters
+  # Supports: image resizing, video transcoding, video thumbnail generation
   getObjectTransformer:
     handler: functions/getObjectTransformer.handler
     timeout: 30
-    memorySize: 2048
+    memorySize: 2048  # High memory for media processing
     environment:
       BUCKET_NAME: ${self:custom.accountStorageBucketName}
       FFMPEG_PATH: /opt/ffmpeg/ffmpeg
     layers:
       - ${cf:layers-${self:provider.stage}.Ffmpeg}
       - ${cf:layers-${self:provider.stage}.Sharp}
+# CloudFormation resources
 resources:
   Resources:
+    # Standard S3 Access Point for the account storage bucket
+    # This serves as the supporting access point for the Object Lambda Access Point
     accountBucketAccessPoint:
       Type: AWS::S3::AccessPoint
       Properties:
@@ -123,19 +163,27 @@ resources:
           BlockPublicPolicy: true
           IgnorePublicAcls: true
           RestrictPublicBuckets: true
+    
+    # S3 Object Lambda Access Point for on-the-fly transformations
+    # Intercepts GET requests and transforms objects using the getObjectTransformer Lambda
     lambdaAccessPoint:
       Type: AWS::S3ObjectLambda::AccessPoint
       Properties:
         Name: account-object-lambda-access-point-${self:provider.stage}
         ObjectLambdaConfiguration:
+          # Support range and part number requests for large files
           AllowedFeatures: ["GetObject-Range", "GetObject-PartNumber"]
           CloudWatchMetricsEnabled: true
+          # Reference to the supporting S3 Access Point
           SupportingAccessPoint: arn:aws:s3:${aws:region}:${aws:accountId}:accesspoint/account-access-point-${self:provider.stage}
           TransformationConfigurations:
+            # Transform all GetObject requests
             - Actions: ["GetObject"]
               ContentTransformation:
                 AwsLambda:
                   FunctionArn: !GetAtt GetObjectTransformerLambdaFunction.Arn
+  # CloudFormation outputs
   Outputs:
+    # ARN of the S3 Object Lambda Access Point for use in other stacks
     S3ObjectLambdaArn:
       Value: !GetAtt lambdaAccessPoint.Arn

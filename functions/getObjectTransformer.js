@@ -4,9 +4,18 @@ import sharp from 'sharp';
 import fs from 'fs';
 import qs from 'querystring';
 import { S3 } from 'aws-sdk';
+import path from 'path';
+import os from 'os';
 
 const s3 = new S3();
 
+/**
+ * Lambda handler for S3 Object Lambda.
+ * Transforms objects on the fly based on query parameters.
+ *
+ * @param {object} event - The Lambda event object.
+ * @returns {Promise<object>} - The result of the S3 writeGetObjectResponse operation.
+ */
 export const handler = async event => {
   console.log(event);
   const {
@@ -47,6 +56,13 @@ export const handler = async event => {
     .then(() => ({ statusCode: 200 }));
 };
 
+/**
+ * Resizes an image based on parameters.
+ *
+ * @param {Buffer} data - The image data.
+ * @param {object} params - The transformation parameters (width, height).
+ * @returns {Promise<Buffer>} - The resized image buffer.
+ */
 const processImage = async (data, params) => {
   const { width, height } = params;
   const size = {};
@@ -60,9 +76,17 @@ const processImage = async (data, params) => {
     .toBuffer();
 };
 
+/**
+ * Transcodes a video based on parameters.
+ *
+ * @param {Stream} data - The video stream.
+ * @param {object} params - The transformation parameters (width, height).
+ * @returns {Promise<Buffer>} - The transcoded video buffer.
+ */
 const processVideo = async (data, params) => {
   const { width, height } = params;
   let size = '100%';
+  const outputFile = path.join(os.tmpdir(), 'output.mp4');
 
   if (height) size = `?x${height}`;
   if (width) size = `${width}x?`;
@@ -74,7 +98,7 @@ const processVideo = async (data, params) => {
 
   await new Promise((resolve, reject) => {
     ffmpeg(data)
-      .output('/tmp/output.mp4')
+      .output(outputFile)
       .size(size)
       .outputOption('-b:v', '512k')
       .on('error', reject)
@@ -82,12 +106,20 @@ const processVideo = async (data, params) => {
       .run();
   });
 
-  return fs.readFileSync('/tmp/output.mp4');
+  return fs.readFileSync(outputFile);
 };
 
+/**
+ * Generates a thumbnail from a video.
+ *
+ * @param {Stream} data - The video stream.
+ * @param {object} params - The transformation parameters (width, height).
+ * @returns {Promise<Buffer>} - The thumbnail image buffer.
+ */
 const processVideoThumbnail = async (data, params) => {
   const { width, height } = params;
   let size = '100%';
+  const outputFile = path.join(os.tmpdir(), 'screenshot.png');
 
   if (height) size = `?x${height}`;
   if (width) size = `${width}x?`;
@@ -95,7 +127,7 @@ const processVideoThumbnail = async (data, params) => {
 
   await new Promise((resolve, reject) => {
     ffmpeg(data)
-      .output('/tmp/screenshot.png')
+      .output(outputFile)
       .seek('0:01')
       .outputOptions('-frames', '1')
       .size(size)
@@ -104,5 +136,5 @@ const processVideoThumbnail = async (data, params) => {
       .run();
   });
 
-  return fs.readFileSync('/tmp/screenshot.png');
+  return fs.readFileSync(outputFile);
 };
