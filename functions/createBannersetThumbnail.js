@@ -3,6 +3,12 @@ import { processImage } from '../helpers/imageHelpers';
 
 const s3 = new S3();
 
+/**
+ * Lambda handler to create a thumbnail from a banner set.
+ *
+ * @param {object} event - The Lambda event object.
+ * @returns {Promise<object>} - The result of the S3 deleteObject operation.
+ */
 export const handler = async event => {
   console.log(JSON.stringify(event));
   process.env.PATH = `${process.env.PATH}:${process.env.LAMBDA_TASK_ROOT}`;
@@ -36,34 +42,3 @@ export const handler = async event => {
     .promise()
     .then(() => s3.deleteObject({ Bucket: srcBucket, Key: srcKey }).promise());
 };
-
-/**
- * Mosaic Notes
- *
- * halfPage: 300x600
- * wideSkyscraper: 160x600
- * largeRectangle: 336x280
- * fullBanner: 468x60
- * leaderboard: 728x90
- * halfBanner: 234x60
- *
- * Resizes - clockwise
- * 300 x 600
- * 160 x 600 (to: 130 x 488)
- * 336 x 280 (to: 470 x 391)
- * 468 x 60 (to: 470 x 60)
- * 728 x 90 (to: 630 x 77)
- * 234 x 60 (to: 960 x 246)
- *
- * Widths (rows top to bottom)
- * (300) + 30 + (130) + 30 + (470) = 960
- * (300) + 30 + (130) + 30 + (470) = 960
- * (300) + 30 + (630) = 960
- * (960) = 960
- *
- * Heights (cols left to right)
- * 38 + (600) + 38 + (246) + 38 = 960
- * 38 + (488) + 35 + (77) + 38 + (246) + 38 = 960
- * 38 + (391) + 37 + (60) + 35 + (77) + 38 + (246) + 38 = 960
- *
- */

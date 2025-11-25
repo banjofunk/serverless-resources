@@ -1,7 +1,7 @@
 {
   "name": "serverless-s3-object-lambda",
   "version": "1.0.0",
-  "description": "",
+  "description": "AWS S3 Object Lambda implementation for on-the-fly image and video transformations. Generates thumbnails, waveforms, and resized media using Lambda functions triggered by S3 events.",
   "main": "handler.js",
   "scripts": {
     "serverless": "serverless",
@@ -22,6 +22,7 @@
     "serverless-scriptable-plugin": "^1.2.1",
     "serverless-webpack": "^5.5.4",
     "webpack": "^5.1.0",
+    "webpack-cli": "^6.0.1",
     "webpack-node-externals": "^2.5.2"
   },
   "dependencies": {

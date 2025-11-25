@@ -3,6 +3,13 @@ import sharp from 'sharp';
 
 const s3 = new S3();
 
+/**
+ * Lambda handler to handle API uploads of images.
+ * Validates image format and metadata, then moves/renames the object.
+ *
+ * @param {object} event - The Lambda event object.
+ * @returns {Promise<void>}
+ */
 export const handler = async event => {
   console.log(event.Records[0].s3);
   const srcBucket = event.Records[0].s3.bucket.name;
@@ -61,6 +68,13 @@ export const handler = async event => {
   }
 };
 
+/**
+ * Renames the source object if the image format is unsupported.
+ *
+ * @param {string} bucket - The S3 bucket name.
+ * @param {string} key - The S3 object key.
+ * @returns {Promise<void>}
+ */
 const renameSrcObj = async (bucket, key) => {
   const destKey = key.replace('-original-api', '-original');
 
